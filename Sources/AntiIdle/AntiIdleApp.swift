@@ -21,31 +21,23 @@ struct AntiIdleApp: App {
             systemImage: manager.isActive ? "circle.fill" : "circle"
         )
 
-        // Toggle button with keyboard shortcut display
+        // Toggle button
         Button("Toggle ON/OFF   \u{2318}\u{21E7}K") {
             manager.toggle()
         }
 
         Divider()
 
-        // Interval submenu
-        Menu("Interval") {
-            ForEach(intervalOptions, id: \.seconds) { option in
-                Button {
-                    manager.maxInterval = option.seconds
-                } label: {
-                    if manager.maxInterval == option.seconds {
-                        Text("\u{2713} \(option.label)")
-                    } else {
-                        Text("   \(option.label)")
-                    }
-                }
+        // Actions submenu — per-action configuration
+        Menu("Actions") {
+            ForEach(ActionType.allCases) { actionType in
+                actionSubmenu(for: actionType)
             }
         }
 
         // Countdown
-        if manager.isActive {
-            Text("Next action in: \(manager.secondsUntilNext)s")
+        if manager.isActive && manager.secondsUntilNext > 0 {
+            Text("Next: \(manager.nextActionName) in \(manager.secondsUntilNext)s")
         }
 
         // Accessibility warning
@@ -105,17 +97,74 @@ struct AntiIdleApp: App {
         }
     }
 
-    // MARK: - Helpers
+    // MARK: - Per-Action Submenu
 
-    private var intervalOptions: [(label: String, seconds: TimeInterval)] {
-        [
-            ("30 seconds", 30),
-            ("1 minute", 60),
-            ("2 minutes", 120),
-            ("3 minutes", 180),
-            ("5 minutes", 300),
-        ]
+    @ViewBuilder
+    private func actionSubmenu(for type: ActionType) -> some View {
+        let config = manager.config(for: type)
+        let statusIcon = config.enabled && config.eventsPerMinute > 0 ? "\u{25CF}" : "\u{25CB}"
+
+        Menu("\(statusIcon) \(type.displayName)") {
+            // Enable/disable toggle
+            Button(config.enabled ? "\u{2713} Enabled" : "   Enable") {
+                var c = config
+                c.enabled.toggle()
+                if c.enabled && c.eventsPerMinute == 0 {
+                    c.eventsPerMinute = type.defaultConfig.eventsPerMinute > 0
+                        ? type.defaultConfig.eventsPerMinute
+                        : type.rateOptions.first ?? 1
+                }
+                manager.updateActionConfig(type, c)
+            }
+
+            Divider()
+
+            // Rate picker
+            Menu("Rate: \(config.eventsPerMinute)/min") {
+                ForEach(type.rateOptions, id: \.self) { epm in
+                    Button(epm == config.eventsPerMinute ? "\u{2713} \(epm)/min" : "   \(epm)/min") {
+                        var c = config
+                        c.eventsPerMinute = epm
+                        if epm > 0 { c.enabled = true }
+                        manager.updateActionConfig(type, c)
+                    }
+                }
+            }
+
+            // Action-specific options
+            if type == .visibleMovement {
+                Divider()
+                Menu("Radius: \(config.movementRadius?.displayName ?? "Medium")") {
+                    ForEach(MovementRadius.allCases, id: \.self) { radius in
+                        Button(radius == config.movementRadius
+                            ? "\u{2713} \(radius.displayName)"
+                            : "   \(radius.displayName)") {
+                            var c = config
+                            c.movementRadius = radius
+                            manager.updateActionConfig(type, c)
+                        }
+                    }
+                }
+            }
+
+            if type == .burstClick {
+                Divider()
+                Menu("Clicks/burst: \(config.burstClickCount ?? 100)") {
+                    ForEach([10, 50, 100, 200, 500], id: \.self) { count in
+                        Button(count == config.burstClickCount
+                            ? "\u{2713} \(count)"
+                            : "   \(count)") {
+                            var c = config
+                            c.burstClickCount = count
+                            manager.updateActionConfig(type, c)
+                        }
+                    }
+                }
+            }
+        }
     }
+
+    // MARK: - Helpers
 
     private func formatHour(_ hour: Int) -> String {
         let formatter = DateFormatter()

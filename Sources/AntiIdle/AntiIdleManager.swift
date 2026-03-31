@@ -19,9 +19,7 @@ final class AntiIdleManager: ObservableObject {
     }
 
     @Published var secondsUntilNext: Int = 0
-    @Published var maxInterval: TimeInterval = 120 {
-        didSet { settings.maxInterval = maxInterval }
-    }
+    @Published var nextActionName: String = ""
 
     @Published var startOnLogin: Bool = false {
         didSet {
@@ -47,11 +45,7 @@ final class AntiIdleManager: ObservableObject {
     }
 
     @Published var actionLog: [(date: Date, description: String)] = []
-
     @Published var accessibilityGranted: Bool = false
-
-    /// Alternates between mouse and key
-    private var nextActionIsMouse: Bool = true
 
     // MARK: - Sub-components
 
@@ -59,9 +53,10 @@ final class AntiIdleManager: ObservableObject {
     private let idleDetector = IdleDetector()
     private var globalHotkey: GlobalHotkey?
 
-    // MARK: - Timers
+    // MARK: - Multi-Timer System
 
-    private var actionTimer: DispatchSourceTimer?
+    private var actionTimers: [ActionType: DispatchSourceTimer] = [:]
+    private var nextFireDates: [ActionType: Date] = [:]
     private let timerQueue = DispatchQueue(label: "com.antiidle.timer", qos: .utility)
     private var countdownTimer: Timer?
 
@@ -72,28 +67,21 @@ final class AntiIdleManager: ObservableObject {
     // MARK: - Init
 
     init() {
-        // Load persisted settings
-        self.maxInterval = settings.maxInterval
         self.startOnLogin = settings.startOnLogin
         self.scheduleEnabled = settings.scheduleEnabled
         self.scheduleStartHour = settings.scheduleStartHour
         self.scheduleEndHour = settings.scheduleEndHour
         self.weekdaysOnly = settings.weekdaysOnly
-
-        // Check accessibility
         self.accessibilityGranted = AccessibilityHelper.isTrusted()
 
-        // Set up global hotkey (Cmd+Shift+K)
         self.globalHotkey = GlobalHotkey { [weak self] in
             DispatchQueue.main.async {
                 self?.toggle()
             }
         }
 
-        // Subscribe to sleep/lock notifications
         subscribeSleepNotifications()
 
-        // Restore active state if was active before quit
         if settings.isActive {
             self.isActive = true
         }
@@ -103,91 +91,143 @@ final class AntiIdleManager: ObservableObject {
 
     func toggle() {
         if !isActive {
-            // Check accessibility before activating
             accessibilityGranted = AccessibilityHelper.isTrusted(promptIfNeeded: true)
         }
         isActive.toggle()
     }
 
+    func config(for type: ActionType) -> ActionConfig {
+        return settings.config(for: type)
+    }
+
+    func updateActionConfig(_ type: ActionType, _ config: ActionConfig) {
+        settings.setConfig(config, for: type)
+        objectWillChange.send()
+
+        if isActive {
+            if config.enabled && config.eventsPerMinute > 0 {
+                scheduleTimer(for: type, config: config)
+            } else {
+                actionTimers[type]?.cancel()
+                actionTimers[type] = nil
+                nextFireDates[type] = nil
+            }
+        }
+    }
+
     // MARK: - Timer Management
 
     private func start() {
-        scheduleNextAction()
+        for actionType in ActionType.allCases {
+            let config = settings.config(for: actionType)
+            if config.enabled && config.eventsPerMinute > 0 {
+                scheduleTimer(for: actionType, config: config)
+            }
+        }
         startCountdownTimer()
     }
 
     private func stop() {
-        actionTimer?.cancel()
-        actionTimer = nil
+        for (_, timer) in actionTimers {
+            timer.cancel()
+        }
+        actionTimers.removeAll()
+        nextFireDates.removeAll()
         countdownTimer?.invalidate()
         countdownTimer = nil
         secondsUntilNext = 0
+        nextActionName = ""
     }
 
-    private func scheduleNextAction() {
-        actionTimer?.cancel()
+    private func scheduleTimer(for actionType: ActionType, config: ActionConfig) {
+        actionTimers[actionType]?.cancel()
 
-        let interval = randomInterval()
-        secondsUntilNext = Int(interval)
+        let interval = randomInterval(epm: config.eventsPerMinute)
+        let fireDate = Date().addingTimeInterval(interval)
+
+        DispatchQueue.main.async { [weak self] in
+            self?.nextFireDates[actionType] = fireDate
+        }
 
         let timer = DispatchSource.makeTimerSource(queue: timerQueue)
         timer.schedule(deadline: .now() + interval)
         timer.setEventHandler { [weak self] in
-            self?.performAction()
+            self?.performAction(actionType)
         }
         timer.resume()
-        actionTimer = timer
+        actionTimers[actionType] = timer
     }
 
     private func startCountdownTimer() {
         countdownTimer?.invalidate()
         countdownTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
-            if self.secondsUntilNext > 0 {
-                self.secondsUntilNext -= 1
+            self?.updateCountdown()
+        }
+    }
+
+    private func updateCountdown() {
+        let now = Date()
+        var soonestTime: TimeInterval = .greatestFiniteMagnitude
+        var soonestType: ActionType?
+
+        for (type, fireDate) in nextFireDates {
+            let remaining = fireDate.timeIntervalSince(now)
+            if remaining < soonestTime {
+                soonestTime = remaining
+                soonestType = type
             }
         }
+
+        secondsUntilNext = max(0, Int(soonestTime))
+        nextActionName = soonestType?.displayName ?? ""
     }
 
     // MARK: - Action Execution
 
-    private func performAction() {
-        // Check if within schedule
+    private func performAction(_ actionType: ActionType) {
         if scheduleEnabled && !isWithinSchedule() {
-            logAction("Skipped (outside schedule)")
-            scheduleNextIfActive()
+            logAction("Skipped \(actionType.displayName) (outside schedule)")
+            rescheduleIfActive(actionType)
             return
         }
 
-        // Check if user is genuinely active
         if idleDetector.isUserActive(within: 10) {
-            logAction("Skipped (user active)")
-            scheduleNextIfActive()
+            logAction("Skipped \(actionType.displayName) (user active)")
+            rescheduleIfActive(actionType)
             return
         }
 
-        // Perform the action
+        let config = settings.config(for: actionType)
         let description: String?
-        if nextActionIsMouse {
+
+        switch actionType {
+        case .mouseJitter:
             description = ActivitySimulator.simulateMouseJitter()
-        } else {
+        case .visibleMovement:
+            description = ActivitySimulator.simulateVisibleMovement(radius: config.movementRadius ?? .medium)
+        case .keepAliveClick:
+            description = ActivitySimulator.simulateKeepAliveClick()
+        case .burstClick:
+            description = ActivitySimulator.simulateBurstClicks(count: config.burstClickCount ?? 100)
+        case .dragGesture:
+            description = ActivitySimulator.simulateDragGesture()
+        case .scrollDrag:
+            description = ActivitySimulator.simulateScrollDrag()
+        case .shiftKeypress:
             description = ActivitySimulator.simulateKeypress()
         }
-        nextActionIsMouse.toggle()
 
-        if let desc = description {
-            logAction(desc)
-        } else {
-            logAction("Failed (no accessibility?)")
-        }
-
-        scheduleNextIfActive()
+        logAction(description ?? "\(actionType.displayName) failed")
+        rescheduleIfActive(actionType)
     }
 
-    private func scheduleNextIfActive() {
+    private func rescheduleIfActive(_ actionType: ActionType) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self, self.isActive else { return }
-            self.scheduleNextAction()
+            let config = self.settings.config(for: actionType)
+            if config.enabled && config.eventsPerMinute > 0 {
+                self.scheduleTimer(for: actionType, config: config)
+            }
         }
     }
 
@@ -197,7 +237,7 @@ final class AntiIdleManager: ObservableObject {
         let calendar = Calendar.current
         let now = Date()
         let hour = calendar.component(.hour, from: now)
-        let weekday = calendar.component(.weekday, from: now) // 1=Sun, 7=Sat
+        let weekday = calendar.component(.weekday, from: now)
 
         if weekdaysOnly && (weekday == 1 || weekday == 7) {
             return false
@@ -208,17 +248,17 @@ final class AntiIdleManager: ObservableObject {
 
     // MARK: - Interval Randomization (Box-Muller)
 
-    private func randomInterval() -> TimeInterval {
-        let mean = maxInterval * 0.6
-        let stddev = maxInterval * 0.2
+    private func randomInterval(epm: Int) -> TimeInterval {
+        let baseInterval = 60.0 / Double(max(1, epm))
+        let mean = baseInterval * 0.8
+        let stddev = baseInterval * 0.2
 
-        // Box-Muller transform for normal distribution
-        let u1 = Double.random(in: 0.001...1.0) // avoid log(0)
+        let u1 = Double.random(in: 0.001...1.0)
         let u2 = Double.random(in: 0.0...1.0)
         let z = sqrt(-2.0 * log(u1)) * cos(2.0 * .pi * u2)
 
         let value = mean + z * stddev
-        return max(30, min(value, maxInterval))
+        return max(2, min(value, baseInterval * 1.5))
     }
 
     // MARK: - Action Log
@@ -268,7 +308,6 @@ final class AntiIdleManager: ObservableObject {
             self?.handleWake()
         }
 
-        // Screen lock/unlock via DistributedNotificationCenter
         let dnc = DistributedNotificationCenter.default()
         dnc.addObserver(forName: NSNotification.Name("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in
             self?.handleSleep()
