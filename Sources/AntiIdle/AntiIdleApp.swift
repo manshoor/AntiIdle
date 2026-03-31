@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 @main
 struct AntiIdleApp: App {
@@ -8,7 +9,11 @@ struct AntiIdleApp: App {
         MenuBarExtra {
             menuContent
         } label: {
-            Image(systemName: manager.isActive ? "play.fill" : "pause.fill")
+            let icon = coloredMenuBarIcon(
+                systemName: manager.isActive ? "eye.fill" : "eye.slash.fill",
+                color: manager.isActive ? .systemGreen : .systemGray
+            )
+            Image(nsImage: icon)
         }
         .menuBarExtraStyle(.menu)
     }
@@ -18,7 +23,7 @@ struct AntiIdleApp: App {
         // Status label
         Label(
             manager.isActive ? "Active" : "Paused",
-            systemImage: manager.isActive ? "circle.fill" : "circle"
+            systemImage: manager.isActive ? "eye.fill" : "eye.slash.fill"
         )
 
         // Toggle button
@@ -179,5 +184,21 @@ struct AntiIdleApp: App {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss"
         return formatter.string(from: date)
+    }
+
+    private func coloredMenuBarIcon(systemName: String, color: NSColor) -> NSImage {
+        let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .medium)
+        guard let base = NSImage(systemSymbolName: systemName, accessibilityDescription: nil)?
+                .withSymbolConfiguration(config) else {
+            return NSImage(systemSymbolName: "eye", accessibilityDescription: nil) ?? NSImage()
+        }
+        let image = NSImage(size: base.size, flipped: false) { rect in
+            base.draw(in: rect)
+            color.set()
+            rect.fill(using: .sourceAtop)
+            return true
+        }
+        image.isTemplate = false
+        return image
     }
 }
