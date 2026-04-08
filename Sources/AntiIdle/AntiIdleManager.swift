@@ -2,8 +2,24 @@ import Foundation
 import Combine
 import AppKit
 import ServiceManagement
+import SwiftUI
 
 final class AntiIdleManager: ObservableObject {
+
+    // MARK: - Popover Visibility (thread-safe)
+
+    private let popoverLock = NSLock()
+    private var _popoverVisible = false
+
+    var isPopoverVisible: Bool {
+        get { popoverLock.lock(); defer { popoverLock.unlock() }; return _popoverVisible }
+        set {
+            popoverLock.lock()
+            _popoverVisible = newValue
+            popoverLock.unlock()
+            DispatchQueue.main.async { [weak self] in self?.objectWillChange.send() }
+        }
+    }
 
     // MARK: - Published State
 
@@ -59,6 +75,7 @@ final class AntiIdleManager: ObservableObject {
     private var nextFireDates: [ActionType: Date] = [:]
     private let timerQueue = DispatchQueue(label: "com.antiidle.timer", qos: .utility)
     private var countdownTimer: Timer?
+    private var burstProbability: Double = 0.3
 
     // MARK: - Sleep/Lock state
 
@@ -185,13 +202,24 @@ final class AntiIdleManager: ObservableObject {
     // MARK: - Action Execution
 
     private func performAction(_ actionType: ActionType) {
+        // Suppress all actions while user is interacting with our popover
+        if isPopoverVisible {
+            logAction("Skipped \(actionType.displayName) (popover open)")
+            rescheduleIfActive(actionType)
+            return
+        }
+
         if scheduleEnabled && !isWithinSchedule() {
             logAction("Skipped \(actionType.displayName) (outside schedule)")
             rescheduleIfActive(actionType)
             return
         }
 
-        if idleDetector.isUserActive(within: 10) {
+        // Distinguish real user activity from our own simulated events
+        let timeSinceOurEvent = Date().timeIntervalSince(ActivitySimulator.lastSimulatedEventTime)
+        let timeSinceAnyActivity = Date().timeIntervalSince(idleDetector.lastActivityDate)
+        let isRealUserActive = timeSinceAnyActivity < 15 && timeSinceOurEvent > 16
+        if isRealUserActive {
             logAction("Skipped \(actionType.displayName) (user active)")
             rescheduleIfActive(actionType)
             return
@@ -208,13 +236,15 @@ final class AntiIdleManager: ObservableObject {
         case .keepAliveClick:
             description = ActivitySimulator.simulateKeepAliveClick()
         case .burstClick:
-            description = ActivitySimulator.simulateBurstClicks(count: config.burstClickCount ?? 100)
+            description = ActivitySimulator.simulateBurstClicks(count: config.burstClickCount ?? 3)
         case .dragGesture:
             description = ActivitySimulator.simulateDragGesture()
         case .scrollDrag:
             description = ActivitySimulator.simulateScrollDrag()
         case .shiftKeypress:
             description = ActivitySimulator.simulateKeypress()
+        case .appSwitch:
+            description = ActivitySimulator.simulateAppSwitch(appNames: config.appNames ?? [])
         }
 
         logAction(description ?? "\(actionType.displayName) failed")
@@ -246,19 +276,31 @@ final class AntiIdleManager: ObservableObject {
         return hour >= scheduleStartHour && hour < scheduleEndHour
     }
 
-    // MARK: - Interval Randomization (Box-Muller)
+    // MARK: - Interval Randomization (Exponential + Burst/Quiet)
 
     private func randomInterval(epm: Int) -> TimeInterval {
         let baseInterval = 60.0 / Double(max(1, epm))
-        let mean = baseInterval * 0.8
-        let stddev = baseInterval * 0.2
 
-        let u1 = Double.random(in: 0.001...1.0)
-        let u2 = Double.random(in: 0.0...1.0)
-        let z = sqrt(-2.0 * log(u1)) * cos(2.0 * .pi * u2)
+        // Exponential distribution (memoryless — naturally irregular)
+        let lambda = Double(max(1, epm)) / 60.0
+        var interval = -log(Double.random(in: 0.001...1.0)) / lambda
 
-        let value = mean + z * stddev
-        return max(2, min(value, baseInterval * 1.5))
+        // Burst/quiet modulation — creates natural clustering
+        if Double.random(in: 0...1) < burstProbability {
+            // Burst: shorter gap, cluster events together
+            interval *= Double.random(in: 0.3...0.6)
+            burstProbability = max(0.1, burstProbability - 0.15)
+        } else {
+            // Quiet: longer gap
+            interval *= Double.random(in: 1.2...2.5)
+            burstProbability = min(0.7, burstProbability + 0.1)
+        }
+
+        // Final noise
+        interval += Double.random(in: -1.5...1.5)
+
+        // Wider clamp: allow up to 4x base for quiet periods, min 3s
+        return max(3, min(interval, baseInterval * 4.0))
     }
 
     // MARK: - Action Log
@@ -331,5 +373,70 @@ final class AntiIdleManager: ObservableObject {
             logAction("Auto-resumed (wake/unlock)")
             wasActiveBeforeSleep = false
         }
+    }
+
+    // MARK: - SwiftUI Binding Helpers
+
+    func bindingForEnabled(_ type: ActionType) -> Binding<Bool> {
+        Binding(
+            get: { self.config(for: type).enabled },
+            set: { newValue in
+                var c = self.config(for: type)
+                c.enabled = newValue
+                if newValue && c.eventsPerMinute == 0 {
+                    c.eventsPerMinute = type.defaultConfig.eventsPerMinute > 0
+                        ? type.defaultConfig.eventsPerMinute
+                        : type.rateOptions.first ?? 1
+                }
+                self.updateActionConfig(type, c)
+            }
+        )
+    }
+
+    func bindingForEPM(_ type: ActionType) -> Binding<Int> {
+        Binding(
+            get: { self.config(for: type).eventsPerMinute },
+            set: { newValue in
+                var c = self.config(for: type)
+                c.eventsPerMinute = newValue
+                self.updateActionConfig(type, c)
+            }
+        )
+    }
+
+    func bindingForMovementRadius(_ type: ActionType) -> Binding<MovementRadius> {
+        Binding(
+            get: { self.config(for: type).movementRadius ?? .medium },
+            set: { newValue in
+                var c = self.config(for: type)
+                c.movementRadius = newValue
+                self.updateActionConfig(type, c)
+            }
+        )
+    }
+
+    func bindingForBurstClickCount(_ type: ActionType) -> Binding<Int> {
+        Binding(
+            get: { self.config(for: type).burstClickCount ?? 3 },
+            set: { newValue in
+                var c = self.config(for: type)
+                c.burstClickCount = newValue
+                self.updateActionConfig(type, c)
+            }
+        )
+    }
+
+    func bindingForAppNames(_ type: ActionType) -> Binding<String> {
+        Binding(
+            get: { (self.config(for: type).appNames ?? []).joined(separator: ", ") },
+            set: { newValue in
+                var c = self.config(for: type)
+                c.appNames = newValue
+                    .split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
+                self.updateActionConfig(type, c)
+            }
+        )
     }
 }

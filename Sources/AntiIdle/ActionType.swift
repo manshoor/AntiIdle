@@ -11,6 +11,7 @@ enum ActionType: String, CaseIterable, Identifiable {
     case dragGesture     = "dragGesture"
     case scrollDrag      = "scrollDrag"
     case shiftKeypress   = "shiftKeypress"
+    case appSwitch       = "appSwitch"
 
     var id: String { rawValue }
 
@@ -21,17 +22,33 @@ enum ActionType: String, CaseIterable, Identifiable {
         case .keepAliveClick:  return "Keep-Alive Clicks"
         case .burstClick:      return "Burst Clicks"
         case .dragGesture:     return "Drag Gesture"
-        case .scrollDrag:      return "Scroll Drag"
+        case .scrollDrag:      return "Scroll"
         case .shiftKeypress:   return "Shift Keypress"
+        case .appSwitch:       return "App Switch"
+        }
+    }
+
+    var iconName: String {
+        switch self {
+        case .mouseJitter:     return "cursorarrow.motionlines"
+        case .visibleMovement: return "arrow.up.left.and.arrow.down.right"
+        case .keepAliveClick:  return "hand.tap"
+        case .burstClick:      return "hand.tap.fill"
+        case .dragGesture:     return "hand.draw"
+        case .scrollDrag:      return "arrow.up.and.down"
+        case .shiftKeypress:   return "keyboard"
+        case .appSwitch:       return "rectangle.on.rectangle.angled"
         }
     }
 
     var defaultConfig: ActionConfig {
         switch self {
-        case .mouseJitter:     return ActionConfig(enabled: true, eventsPerMinute: 1)
+        case .mouseJitter:     return ActionConfig(enabled: true, eventsPerMinute: 2)
         case .shiftKeypress:   return ActionConfig(enabled: true, eventsPerMinute: 1)
-        case .visibleMovement: return ActionConfig(enabled: false, eventsPerMinute: 0, movementRadius: .medium)
-        case .burstClick:      return ActionConfig(enabled: false, eventsPerMinute: 0, burstClickCount: 100)
+        case .visibleMovement: return ActionConfig(enabled: true, eventsPerMinute: 1, movementRadius: .medium)
+        case .keepAliveClick:  return ActionConfig(enabled: true, eventsPerMinute: 1)
+        case .burstClick:      return ActionConfig(enabled: false, eventsPerMinute: 0, burstClickCount: 3)
+        case .appSwitch:       return ActionConfig(enabled: false, eventsPerMinute: 0, appNames: [])
         default:               return ActionConfig(enabled: false, eventsPerMinute: 0)
         }
     }
@@ -39,6 +56,7 @@ enum ActionType: String, CaseIterable, Identifiable {
     var rateOptions: [Int] {
         switch self {
         case .burstClick:  return [1, 2, 3, 5]
+        case .appSwitch:   return [1, 2, 3, 5, 10]
         case .dragGesture, .scrollDrag: return [1, 2, 3, 5, 10]
         default: return [1, 2, 3, 5, 10, 15, 20, 30, 60]
         }
@@ -52,6 +70,7 @@ struct ActionConfig: Codable, Equatable {
     var eventsPerMinute: Int
     var movementRadius: MovementRadius?
     var burstClickCount: Int?
+    var appNames: [String]?
 }
 
 // MARK: - Movement Radius
