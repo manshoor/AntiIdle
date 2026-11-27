@@ -76,13 +76,21 @@ enum ActivitySimulator {
         return (cp1, cp2)
     }
 
-    /// Clamp point to screen bounds with margin
+    private static let maxDisplays: UInt32 = 16
+
+    /// Clamp point to the display it is on (or the nearest one), with margin
     private static func clampToScreen(_ point: CGPoint, margin: CGFloat = 10) -> CGPoint {
-        let bounds = CGDisplayBounds(CGMainDisplayID())
-        return CGPoint(
-            x: max(margin, min(point.x, bounds.width - margin)),
-            y: max(margin, min(point.y, bounds.height - margin))
-        )
+        return DisplayClamp.clamp(point, to: activeDisplayBounds(), margin: margin)
+    }
+
+    /// Bounds of every active display, in global display coordinates
+    private static func activeDisplayBounds() -> [CGRect] {
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(maxDisplays))
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(maxDisplays, &ids, &count) == .success else {
+            return [CGDisplayBounds(CGMainDisplayID())]
+        }
+        return ids.prefix(Int(count)).map { CGDisplayBounds($0) }
     }
 
     /// Post a mouseMoved event using human event source
