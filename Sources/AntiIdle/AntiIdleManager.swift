@@ -182,9 +182,8 @@ final class AntiIdleManager: ObservableObject {
         let interval = randomInterval(epm: config.eventsPerMinute)
         let fireDate = Date().addingTimeInterval(interval)
 
-        DispatchQueue.main.async { [weak self] in
-            self?.nextFireDates[actionType] = fireDate
-        }
+        // Already on main: a deferred write could land after stop().
+        nextFireDates[actionType] = fireDate
 
         // Fire on main so the snapshot reads settings on the thread that
         // writes them; the action itself then runs on timerQueue.
