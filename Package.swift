@@ -8,6 +8,11 @@ let package = Package(
         .executableTarget(
             name: "AntiIdle",
             path: "Sources/AntiIdle"
+        ),
+        .testTarget(
+            name: "AntiIdleTests",
+            dependencies: ["AntiIdle"],
+            path: "Tests/AntiIdleTests"
         )
     ]
 )
