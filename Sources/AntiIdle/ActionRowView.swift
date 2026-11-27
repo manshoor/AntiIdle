@@ -142,7 +142,11 @@ struct ActionRowView: View {
     }
 
     // Parse the text into appNames, then show the normalized form.
+    // Skip unchanged names: each write reschedules the App Switch timer.
     private func commitAppNames() {
+        guard AppNameList.parse(appNamesText) != (config.appNames ?? []) else {
+            return
+        }
         let binding = manager.bindingForAppNames(actionType)
         binding.wrappedValue = appNamesText
         appNamesText = binding.wrappedValue
