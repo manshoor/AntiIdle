@@ -99,8 +99,11 @@ final class AntiIdleManager: ObservableObject {
 
         subscribeSleepNotifications()
 
+        // Restore the saved Active state. didSet does not run during init,
+        // so start the timers explicitly.
         if settings.isActive {
             self.isActive = true
+            start()
         }
     }
 
