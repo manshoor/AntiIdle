@@ -84,6 +84,9 @@ final class AntiIdleManager: ObservableObject {
     private var countdownTimer: Timer?
     private var burstProbability: Double = 0.3
 
+    /// Skip actions if the user gave real input this recently.
+    private static let userActiveWindow: TimeInterval = 15
+
     // MARK: - Sleep/Lock state
 
     private var sleepTracker = SleepResumeTracker()
@@ -255,11 +258,8 @@ final class AntiIdleManager: ObservableObject {
             return
         }
 
-        // Distinguish real user activity from our own simulated events
-        let timeSinceOurEvent = Date().timeIntervalSince(ActivitySimulator.lastSimulatedEventTime)
-        let timeSinceAnyActivity = Date().timeIntervalSince(idleDetector.lastActivityDate)
-        let isRealUserActive = timeSinceAnyActivity < 15 && timeSinceOurEvent > 16
-        if isRealUserActive {
+        // The idle detector ignores our tagged events, so this is real input only
+        if idleDetector.isUserActive(within: Self.userActiveWindow) {
             logAction("Skipped \(actionType.displayName) (user active)")
             rescheduleIfActive(actionType)
             return

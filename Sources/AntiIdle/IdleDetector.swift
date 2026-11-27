@@ -81,6 +81,11 @@ final class IdleDetector {
                     return Unmanaged.passUnretained(event)
                 }
 
+                // Our own simulated events are not user activity.
+                if SyntheticEventTag.isTagged(event) {
+                    return Unmanaged.passUnretained(event)
+                }
+
                 detector.recordActivity()
                 return Unmanaged.passUnretained(event)
             },

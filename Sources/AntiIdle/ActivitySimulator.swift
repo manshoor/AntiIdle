@@ -5,12 +5,13 @@ import Foundation
 
 enum ActivitySimulator {
 
-    // MARK: - Shared State
-
-    /// Timestamp of last simulated event — used to distinguish our events from real user input
-    static var lastSimulatedEventTime: Date = .distantPast
-
     // MARK: - Human Motion Utilities
+
+    /// Tag and post an event, so the idle detector ignores it
+    private static func post(_ event: CGEvent) {
+        SyntheticEventTag.apply(to: event)
+        event.post(tap: .cghidEventTap)
+    }
 
     /// Event source that shares modifier/keyboard state with real HID events
     private static func humanEventSource() -> CGEventSource? {
@@ -103,8 +104,7 @@ enum ActivitySimulator {
             mouseCursorPosition: clamped,
             mouseButton: .left
         ) else { return false }
-        lastSimulatedEventTime = Date()
-        event.post(tap: .cghidEventTap)
+        post(event)
         return true
     }
 
@@ -181,8 +181,7 @@ enum ActivitySimulator {
                 keyDown: true
             ) else { return }
             keyDown.flags = modFlag
-            lastSimulatedEventTime = Date()
-            keyDown.post(tap: .cghidEventTap)
+            post(keyDown)
 
             // Realistic hold time: 80-150ms
             usleep(UInt32.random(in: 80_000...150_000))
@@ -193,8 +192,7 @@ enum ActivitySimulator {
                 keyDown: false
             ) else { return }
             keyUp.flags = []
-            lastSimulatedEventTime = Date()
-            keyUp.post(tap: .cghidEventTap)
+            post(keyUp)
         }
 
         pressRelease(keyCode, flag)
@@ -301,8 +299,7 @@ enum ActivitySimulator {
             mouseButton: .left
         ) else { return nil }
         mouseDown.setIntegerValueField(.mouseEventClickState, value: 1)
-        lastSimulatedEventTime = Date()
-        mouseDown.post(tap: .cghidEventTap)
+        post(mouseDown)
 
         // Realistic hold time: 80-200ms
         usleep(UInt32.random(in: 80_000...200_000))
@@ -322,8 +319,7 @@ enum ActivitySimulator {
             mouseButton: .left
         ) else { return nil }
         mouseUp.setIntegerValueField(.mouseEventClickState, value: 1)
-        lastSimulatedEventTime = Date()
-        mouseUp.post(tap: .cghidEventTap)
+        post(mouseUp)
 
         // 40% chance: post-click settle movement
         if Double.random(in: 0...1) < 0.4 {
@@ -359,8 +355,7 @@ enum ActivitySimulator {
                 mouseButton: .left
             ) else { break }
             mouseDown.setIntegerValueField(.mouseEventClickState, value: Int64(i + 1))
-            lastSimulatedEventTime = Date()
-            mouseDown.post(tap: .cghidEventTap)
+            post(mouseDown)
 
             // Realistic hold: 80-200ms
             usleep(UInt32.random(in: 80_000...200_000))
@@ -372,8 +367,7 @@ enum ActivitySimulator {
                 mouseButton: .left
             ) else { break }
             mouseUp.setIntegerValueField(.mouseEventClickState, value: Int64(i + 1))
-            lastSimulatedEventTime = Date()
-            mouseUp.post(tap: .cghidEventTap)
+            post(mouseUp)
 
             completed += 1
 
@@ -420,8 +414,7 @@ enum ActivitySimulator {
             mouseCursorPosition: startPos,
             mouseButton: .left
         ) else { return nil }
-        lastSimulatedEventTime = Date()
-        mouseDown.post(tap: .cghidEventTap)
+        post(mouseDown)
 
         // Drag through Bézier curve
         let steps = Int.random(in: 8...15)
@@ -443,8 +436,7 @@ enum ActivitySimulator {
                 mouseCursorPosition: clamped,
                 mouseButton: .left
             ) else { break }
-            lastSimulatedEventTime = Date()
-            dragEvent.post(tap: .cghidEventTap)
+            post(dragEvent)
 
             // Variable timing: faster middle, slower ends
             let speed = 4 * linearT * (1 - linearT)
@@ -463,8 +455,7 @@ enum ActivitySimulator {
             mouseCursorPosition: endPoint,
             mouseButton: .left
         ) else { return nil }
-        lastSimulatedEventTime = Date()
-        mouseUp.post(tap: .cghidEventTap)
+        post(mouseUp)
 
         let direction: String
         let angleDeg = angle * 180 / .pi
@@ -517,8 +508,7 @@ enum ActivitySimulator {
                 wheel3: 0
             ) else { break }
 
-            lastSimulatedEventTime = Date()
-            scrollEvent.post(tap: .cghidEventTap)
+            post(scrollEvent)
             delivered += delta
             ticksRemaining -= delta
 
