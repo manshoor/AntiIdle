@@ -26,3 +26,31 @@ final class ActionGateTests: XCTestCase {
         XCTAssertEqual(seen, .stopped)
     }
 }
+
+final class ActionGateTicketTests: XCTestCase {
+
+    func testTicketAdmittedWhileRunning() {
+        let gate = ActionGate()
+        gate.set(.running)
+        XCTAssertTrue(gate.admits(gate.ticket()))
+    }
+
+    func testTicketRejectedAfterStop() {
+        let gate = ActionGate()
+        gate.set(.running)
+        let ticket = gate.ticket()
+        gate.set(.stopped)
+        XCTAssertFalse(gate.admits(ticket))
+    }
+
+    // Stop then start while an action is queued: the stale action must not run.
+    func testTicketRejectedAfterStopThenStart() {
+        let gate = ActionGate()
+        gate.set(.running)
+        let stale = gate.ticket()
+        gate.set(.stopped)
+        gate.set(.running)
+        XCTAssertFalse(gate.admits(stale))
+        XCTAssertTrue(gate.admits(gate.ticket()))
+    }
+}
