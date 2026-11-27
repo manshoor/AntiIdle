@@ -7,6 +7,8 @@ final class IdleDetector {
 
     // Guarded by lock: the tap thread reads it to re-enable the tap.
     private var _eventTap: CFMachPort?
+    // Guarded by lock: the tap thread's run loop, so teardown can stop it.
+    private var _tapRunLoop: CFRunLoop?
     private var runLoopSource: CFRunLoopSource?
     private var runLoopThread: Thread?
     private var hasLoggedTapFailure = false
@@ -25,11 +27,20 @@ final class IdleDetector {
         stopEventTap()
     }
 
-    /// Starts the event tap if it is not running. Safe to call repeatedly,
-    /// e.g. after Accessibility permission is granted. Main thread only.
+    /// Starts the event tap if it is not running, and re-enables or
+    /// rebuilds one macOS turned off. Safe to call repeatedly, e.g. after
+    /// Accessibility permission is granted. Main thread only.
     func ensureEventTap() {
-        guard runLoopThread == nil else {
-            return
+        if let tap = currentTap() {
+            guard !CGEvent.tapIsEnabled(tap: tap) else {
+                return
+            }
+            CGEvent.tapEnable(tap: tap, enable: true)
+            guard !CGEvent.tapIsEnabled(tap: tap) else {
+                return
+            }
+            // Re-enable failed (e.g. permission revoked, then granted): rebuild.
+            stopEventTap()
         }
         startEventTap()
     }
@@ -44,12 +55,15 @@ final class IdleDetector {
         lock.unlock()
     }
 
+    private func currentTap() -> CFMachPort? {
+        lock.lock()
+        defer { lock.unlock() }
+        return _eventTap
+    }
+
     // macOS disables a tap that is slow or blocked by user input; turn it back on.
     private func reenableEventTap() {
-        lock.lock()
-        let tap = _eventTap
-        lock.unlock()
-        guard let tap = tap else {
+        guard let tap = currentTap() else {
             return
         }
         CGEvent.tapEnable(tap: tap, enable: true)
@@ -110,9 +124,14 @@ final class IdleDetector {
         lock.unlock()
         self.runLoopSource = source
 
-        // Capture tap and source so the thread never reads self's properties.
-        let thread = Thread {
-            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
+        // Capture tap and source so the thread never reads self's properties;
+        // record this thread's run loop so teardown can stop it.
+        let thread = Thread { [weak self] in
+            guard let runLoop = CFRunLoopGetCurrent() else {
+                return
+            }
+            self?.storeTapRunLoop(runLoop)
+            CFRunLoopAddSource(runLoop, source, .commonModes)
             CGEvent.tapEnable(tap: tap, enable: true)
             CFRunLoopRun()
         }
@@ -122,17 +141,29 @@ final class IdleDetector {
         self.runLoopThread = thread
     }
 
+    private func storeTapRunLoop(_ runLoop: CFRunLoop) {
+        lock.lock()
+        _tapRunLoop = runLoop
+        lock.unlock()
+    }
+
+    // Disable and invalidate the tap, then stop its thread's run loop.
+    // Invalidating the port also removes its source, so CFRunLoopRun
+    // returns even if the stop arrives before the loop starts.
     private func stopEventTap() {
         lock.lock()
         let tap = _eventTap
+        let runLoop = _tapRunLoop
         _eventTap = nil
+        _tapRunLoop = nil
         lock.unlock()
+
         if let tap = tap {
             CGEvent.tapEnable(tap: tap, enable: false)
+            CFMachPortInvalidate(tap)
         }
-        if let source = runLoopSource, let thread = runLoopThread {
-            CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, .commonModes)
-            thread.cancel()
+        if let runLoop = runLoop {
+            CFRunLoopStop(runLoop)
         }
         runLoopSource = nil
         runLoopThread = nil
