@@ -82,6 +82,7 @@ final class AntiIdleManager: ObservableObject {
     private var nextFireDates: [ActionType: Date] = [:]
     private let timerQueue = DispatchQueue(label: "com.antiidle.timer", qos: .utility)
     private var countdownTimer: Timer?
+    private let actionGate = ActionGate()
     private var burstProbability: Double = 0.3
 
     /// Skip actions if the user gave real input this recently.
@@ -152,6 +153,7 @@ final class AntiIdleManager: ObservableObject {
 
     private func start() {
         idleDetector.ensureEventTap()
+        actionGate.set(.running)
         for actionType in ActionType.allCases {
             let config = settings.config(for: actionType)
             if config.enabled && config.eventsPerMinute > 0 {
@@ -162,6 +164,7 @@ final class AntiIdleManager: ObservableObject {
     }
 
     private func stop() {
+        actionGate.set(.stopped)
         for (_, timer) in actionTimers {
             timer.cancel()
         }
@@ -245,6 +248,11 @@ final class AntiIdleManager: ObservableObject {
 
     // timerQueue: reads only the snapshot and lock-protected state.
     private func performAction(_ actionType: ActionType, _ snapshot: ActionSnapshot) {
+        // Stopped, paused or locked since this was queued: drop it.
+        guard actionGate.state == .running else {
+            return
+        }
+
         // Suppress all actions while user is interacting with our popover
         if isPopoverVisible {
             logAction("Skipped \(actionType.displayName) (popover open)")
