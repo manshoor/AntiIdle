@@ -61,7 +61,14 @@ final class AntiIdleManager: ObservableObject {
     }
 
     @Published var actionLog: [(date: Date, description: String)] = []
-    @Published var accessibilityGranted: Bool = false
+    @Published var accessibilityGranted: Bool = false {
+        didSet {
+            // The tap fails without permission; retry once it is granted.
+            if accessibilityGranted {
+                idleDetector.ensureEventTap()
+            }
+        }
+    }
 
     // MARK: - Sub-components
 
@@ -141,6 +148,7 @@ final class AntiIdleManager: ObservableObject {
     // MARK: - Timer Management
 
     private func start() {
+        idleDetector.ensureEventTap()
         for actionType in ActionType.allCases {
             let config = settings.config(for: actionType)
             if config.enabled && config.eventsPerMinute > 0 {
@@ -211,6 +219,10 @@ final class AntiIdleManager: ObservableObject {
 
     // Main thread: copy what the action needs, then run it off main.
     private func dispatchAction(_ actionType: ActionType) {
+        // Periodic retry: permission may be granted in System Settings
+        // without the app noticing.
+        idleDetector.ensureEventTap()
+
         let snapshot = makeSnapshot(for: actionType)
         timerQueue.async { [weak self] in
             self?.performAction(actionType, snapshot)
