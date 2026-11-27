@@ -226,8 +226,9 @@ final class AntiIdleManager: ObservableObject {
         idleDetector.ensureEventTap()
 
         let snapshot = makeSnapshot(for: actionType)
+        let ticket = actionGate.ticket()
         timerQueue.async { [weak self] in
-            self?.performAction(actionType, snapshot)
+            self?.performAction(actionType, snapshot, ticket)
         }
     }
 
@@ -243,9 +244,14 @@ final class AntiIdleManager: ObservableObject {
     }
 
     // timerQueue: reads only the snapshot and lock-protected state.
-    private func performAction(_ actionType: ActionType, _ snapshot: ActionSnapshot) {
-        // Stopped, paused or locked since this was queued: drop it.
-        guard actionGate.state == .running else {
+    private func performAction(
+        _ actionType: ActionType,
+        _ snapshot: ActionSnapshot,
+        _ ticket: ActionGate.Ticket
+    ) {
+        // Stopped, paused or locked since this was queued (even if started
+        // again since): drop it.
+        guard actionGate.admits(ticket) else {
             return
         }
 
