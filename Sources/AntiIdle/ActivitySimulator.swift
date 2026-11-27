@@ -550,15 +550,35 @@ enum ActivitySimulator {
 
         let appName = target.localizedName ?? "Unknown"
 
-        // Activate the target app
-        target.activate(options: [.activateIgnoringOtherApps])
+        // Ask macOS to activate the target app
+        guard requestActivation(of: target) else {
+            return "App Switch failed (\(appName) refused activation)"
+        }
 
         // Wait for the app to come to foreground
         usleep(UInt32.random(in: 300_000...500_000))
+
+        // An allowed request is not a guarantee; confirm before reporting success
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == target.processIdentifier else {
+            return "App Switch failed (\(appName) did not come to front)"
+        }
 
         // Perform a small mouse jitter in the newly focused app
         _ = simulateMouseJitter()
 
         return "Switched to \(appName)"
+    }
+
+    /// macOS 14+ ignores activateIgnoringOtherApps. Send both the
+    /// cooperative and the plain request: an allowed cooperative request
+    /// can still do nothing when we are not the active app. Returns false
+    /// only if the system refused both.
+    private static func requestActivation(of app: NSRunningApplication) -> Bool {
+        if #available(macOS 14, *) {
+            let cooperative = app.activate(from: NSRunningApplication.current, options: [])
+            let plain = app.activate(options: [])
+            return cooperative || plain
+        }
+        return app.activate(options: [.activateIgnoringOtherApps])
     }
 }
