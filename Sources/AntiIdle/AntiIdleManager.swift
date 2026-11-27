@@ -172,10 +172,12 @@ final class AntiIdleManager: ObservableObject {
             self?.nextFireDates[actionType] = fireDate
         }
 
-        let timer = DispatchSource.makeTimerSource(queue: timerQueue)
+        // Fire on main so the snapshot reads settings on the thread that
+        // writes them; the action itself then runs on timerQueue.
+        let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + interval)
         timer.setEventHandler { [weak self] in
-            self?.performAction(actionType)
+            self?.dispatchAction(actionType)
         }
         timer.resume()
         actionTimers[actionType] = timer
@@ -207,7 +209,27 @@ final class AntiIdleManager: ObservableObject {
 
     // MARK: - Action Execution
 
-    private func performAction(_ actionType: ActionType) {
+    // Main thread: copy what the action needs, then run it off main.
+    private func dispatchAction(_ actionType: ActionType) {
+        let snapshot = makeSnapshot(for: actionType)
+        timerQueue.async { [weak self] in
+            self?.performAction(actionType, snapshot)
+        }
+    }
+
+    private func makeSnapshot(for actionType: ActionType) -> ActionSnapshot {
+        let schedule = scheduleEnabled
+            ? ScheduleWindow(
+                startHour: scheduleStartHour,
+                endHour: scheduleEndHour,
+                days: weekdaysOnly ? .weekdays : .everyDay
+            )
+            : nil
+        return ActionSnapshot(config: settings.config(for: actionType), schedule: schedule)
+    }
+
+    // timerQueue: reads only the snapshot and lock-protected state.
+    private func performAction(_ actionType: ActionType, _ snapshot: ActionSnapshot) {
         // Suppress all actions while user is interacting with our popover
         if isPopoverVisible {
             logAction("Skipped \(actionType.displayName) (popover open)")
@@ -215,7 +237,7 @@ final class AntiIdleManager: ObservableObject {
             return
         }
 
-        if scheduleEnabled && !isWithinSchedule() {
+        if let schedule = snapshot.schedule, !schedule.contains(Date(), calendar: .current) {
             logAction("Skipped \(actionType.displayName) (outside schedule)")
             rescheduleIfActive(actionType)
             return
@@ -231,7 +253,7 @@ final class AntiIdleManager: ObservableObject {
             return
         }
 
-        let config = settings.config(for: actionType)
+        let config = snapshot.config
         let description: String?
 
         switch actionType {
@@ -265,21 +287,6 @@ final class AntiIdleManager: ObservableObject {
                 self.scheduleTimer(for: actionType, config: config)
             }
         }
-    }
-
-    // MARK: - Schedule Check
-
-    private func isWithinSchedule() -> Bool {
-        let calendar = Calendar.current
-        let now = Date()
-        let hour = calendar.component(.hour, from: now)
-        let weekday = calendar.component(.weekday, from: now)
-
-        if weekdaysOnly && (weekday == 1 || weekday == 7) {
-            return false
-        }
-
-        return hour >= scheduleStartHour && hour < scheduleEndHour
     }
 
     // MARK: - Interval Randomization (Exponential + Burst/Quiet)
