@@ -79,7 +79,7 @@ final class AntiIdleManager: ObservableObject {
 
     // MARK: - Sleep/Lock state
 
-    private var wasActiveBeforeSleep = false
+    private var sleepTracker = SleepResumeTracker()
 
     // MARK: - Init
 
@@ -113,6 +113,9 @@ final class AntiIdleManager: ObservableObject {
         if !isActive {
             accessibilityGranted = AccessibilityHelper.isTrusted(promptIfNeeded: true)
         }
+
+        // A manual choice overrides any pending auto-resume.
+        sleepTracker.reset()
         isActive.toggle()
     }
 
@@ -363,19 +366,19 @@ final class AntiIdleManager: ObservableObject {
     }
 
     private func handleSleep() {
-        wasActiveBeforeSleep = isActive
-        if isActive {
-            isActive = false
-            logAction("Auto-paused (sleep/lock)")
+        guard sleepTracker.onSleep(isActive ? .running : .stopped) == .pause else {
+            return
         }
+        isActive = false
+        logAction("Auto-paused (sleep/lock)")
     }
 
     private func handleWake() {
-        if wasActiveBeforeSleep {
-            isActive = true
-            logAction("Auto-resumed (wake/unlock)")
-            wasActiveBeforeSleep = false
+        guard sleepTracker.onWake() == .resume else {
+            return
         }
+        isActive = true
+        logAction("Auto-resumed (wake/unlock)")
     }
 
     // MARK: - SwiftUI Binding Helpers
