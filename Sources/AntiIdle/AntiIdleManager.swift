@@ -363,41 +363,39 @@ final class AntiIdleManager: ObservableObject {
         let wsnc = NSWorkspace.shared.notificationCenter
 
         wsnc.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.handleSleep()
+            self?.handlePower(.sleep)
         }
         wsnc.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.handleWake()
+            self?.handlePower(.wake)
         }
         wsnc.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.handleSleep()
+            self?.handlePower(.sleep)
         }
         wsnc.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.handleWake()
+            self?.handlePower(.wake)
         }
 
         let dnc = DistributedNotificationCenter.default()
         dnc.addObserver(forName: NSNotification.Name("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in
-            self?.handleSleep()
+            self?.handlePower(.lock)
         }
         dnc.addObserver(forName: NSNotification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main) { [weak self] _ in
-            self?.handleWake()
+            self?.handlePower(.unlock)
         }
     }
 
-    private func handleSleep() {
-        guard sleepTracker.onSleep(isActive ? .running : .stopped) == .pause else {
+    // Pause or resume as SleepResumeTracker decides.
+    private func handlePower(_ event: PowerEvent) {
+        switch sleepTracker.handle(event, isActive ? .running : .stopped) {
+        case .pause:
+            isActive = false
+            logAction("Auto-paused (sleep/lock)")
+        case .resume:
+            isActive = true
+            logAction("Auto-resumed (wake/unlock)")
+        case .none:
             return
         }
-        isActive = false
-        logAction("Auto-paused (sleep/lock)")
-    }
-
-    private func handleWake() {
-        guard sleepTracker.onWake() == .resume else {
-            return
-        }
-        isActive = true
-        logAction("Auto-resumed (wake/unlock)")
     }
 
     // MARK: - SwiftUI Binding Helpers
