@@ -6,6 +6,11 @@ struct ActionRowView: View {
 
     @State private var isExpanded = false
 
+    // Raw App Switch text. Parsed into appNames only on commit, so commas
+    // and spaces are not stripped while typing.
+    @State private var appNamesText = ""
+    @FocusState private var appNamesFocused: Bool
+
     private var config: ActionConfig {
         manager.config(for: actionType)
     }
@@ -105,9 +110,19 @@ struct ActionRowView: View {
                             Text("Apps")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            TextField("Safari, Slack, VS Code", text: manager.bindingForAppNames(actionType))
+                            TextField("Safari, Slack, VS Code", text: $appNamesText)
                                 .font(.callout)
                                 .textFieldStyle(.roundedBorder)
+                                .focused($appNamesFocused)
+                                .onAppear { loadAppNames() }
+                                .onSubmit { commitAppNames() }
+                                .onChange(of: appNamesFocused) { focused in
+                                    if !focused {
+                                        commitAppNames()
+                                    }
+                                }
+                                // Collapsing the row or closing the popover may not end focus.
+                                .onDisappear { commitAppNames() }
                         }
                     }
                 }
@@ -117,5 +132,19 @@ struct ActionRowView: View {
             }
         }
         .background(config.enabled ? Color.accentColor.opacity(0.04) : Color.clear)
+    }
+
+    // MARK: - App Names
+
+    // Show the stored names as editable text.
+    private func loadAppNames() {
+        appNamesText = manager.bindingForAppNames(actionType).wrappedValue
+    }
+
+    // Parse the text into appNames, then show the normalized form.
+    private func commitAppNames() {
+        let binding = manager.bindingForAppNames(actionType)
+        binding.wrappedValue = appNamesText
+        appNamesText = binding.wrappedValue
     }
 }

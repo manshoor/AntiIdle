@@ -434,13 +434,10 @@ final class AntiIdleManager: ObservableObject {
 
     func bindingForAppNames(_ type: ActionType) -> Binding<String> {
         Binding(
-            get: { (self.config(for: type).appNames ?? []).joined(separator: ", ") },
+            get: { AppNameList.format(self.config(for: type).appNames ?? []) },
             set: { newValue in
                 var c = self.config(for: type)
-                c.appNames = newValue
-                    .split(separator: ",")
-                    .map { $0.trimmingCharacters(in: .whitespaces) }
-                    .filter { !$0.isEmpty }
+                c.appNames = AppNameList.parse(newValue)
                 self.updateActionConfig(type, c)
             }
         )
